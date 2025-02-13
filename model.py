@@ -47,6 +47,7 @@ class MultiHeadAttention(nn.Module):
         d_head = d_model // n_heads
         self.heads = nn.ModuleList([SelfAttentionHead(d_model, d_head, n_ctx) for _ in range(n_heads)])
         self.proj = nn.Linear(d_model, d_model)  # projection back to the residual path
+        self.proj.is_residual_projection = True 
 
     def forward(self, x: torch.Tensor):
         x = torch.cat([head(x) for head in self.heads], dim=-1)
@@ -61,6 +62,7 @@ class MLP(nn.Module):
         self.proj = nn.Linear(
             4 * d_model, d_model
         )  # projection back to the residual path
+        self.proj.is_residual_projection = True
 
     def forward(self, x: torch.Tensor):
         x = self.fc(x)
@@ -97,10 +99,27 @@ class GPT(nn.Module):
             ]
         )
         self.ln = nn.LayerNorm(config.d_model)
-        self.lm_head = nn.Linear(config.d_model, config.vocab_size)
+        self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
+
+        self.apply(self._init_weights)
+
         self.lm_head.weight = self.token_embd.weight
 
-    def forward(self, idx: torch.Tensor):
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0., std=0.02)  # https://github.com/openai/gpt-2/blob/master/src/model.py#L50
+            if hasattr(module, "bias") and module.bias is not None:
+                torch.nn.init.zeros_(module.bias) # https://github.com/openai/gpt-2/blob/master/src/model.py#L54
+            if hasattr(module, 'is_residual_projection'):
+                module.weight.data *= (2 * self.config.n_layers) ** -0.5 # gpt2 paper - scale the weights of residual layers at initialization by 1/sqrt(residual_layers)
+
+        if isinstance(module, nn.Embedding):
+            if module is self.position_embd:
+                torch.nn.init.normal_(module.weight, mean=0., std=0.01)  # https://github.com/openai/gpt-2/blob/master/src/model.py#L152-L153
+            else:
+                torch.nn.init.normal_(module.weight, mean=0., std=0.02)  # https://github.com/openai/gpt-2/blob/master/src/model.py#L154-L155
+
+    def forward(self, idx: torch.Tensor, targets:torch.Tensor|None = None):
         B, T = idx.shape
 
         assert T <= self.config.n_ctx
@@ -112,4 +131,9 @@ class GPT(nn.Module):
         for layer in self.decoder_layers:
             x = layer(x)
 
-        return self.lm_head(self.ln(x)) # (B, T, vocab_size)
+        logits = self.lm_head(self.ln(x)) # (B, T, vocab_size)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), targets.view(-1))
+
+        return logits, loss

@@ -9,7 +9,11 @@ config = GPTConfig()
 model = GPT(config)
 model.to(device)
 
-print(model)
+B = 4
+T = 32
 
-idx = torch.randint(0, config.vocab_size, (4, 8), device=device)
-print(model(idx).shape)
+idx = torch.randint(0, config.vocab_size, (B, T), device=device)
+targets = torch.randint(0, config.vocab_size, (B, T), device=device)
+
+logits, loss = model(idx, targets)
+print(loss.item())
