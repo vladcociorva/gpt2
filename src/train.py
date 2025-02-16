@@ -1,3 +1,4 @@
+import time
 import torch
 import tiktoken
 import numpy as np
@@ -39,11 +40,17 @@ x, y = x.to(device), y.to(device)
 
 optim = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for step in range(steps):
+    start = time.perf_counter()
+
     optim.zero_grad()
     logits, loss = model(x, y)
     loss.backward()
     optim.step()
-    print(f'step {step:<5} | loss {loss.item():.6f}')
+
+    torch.cuda.synchronize()
+    end = time.perf_counter()
+
+    print(f'step {step:<5} | loss {loss.item():.6f} | time {(end-start)*1e3:.2f}ms')
     if step % gen_interval == 0: 
         xg = torch.tensor([GPT2_EOT], dtype=torch.long, device=device).view(1, -1)
         yg = model.generate(xg, max_new_tokens=32)
