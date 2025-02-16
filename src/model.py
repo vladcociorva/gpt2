@@ -137,6 +137,27 @@ class GPT(nn.Module):
             loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), targets.view(-1))
 
         return logits, loss
+    
+    def config_optimizer(self, weight_decay: float, lr: float):
+        # don't weight decay embeddings, layer norms and biases
+        # only weight decay parameters that control the "content" of the learned representations (i.e., linear transformations)
+        no_decay = ["bias", "ln", "embd"]
+
+        decay_params = [p for n, p in self.named_parameters() if not any(nd in n for nd in no_decay)]
+        no_decay_params = [p for n, p in self.named_parameters() if any(nd in n for nd in no_decay)]
+
+        optimizer_grouped_params = [
+            {
+                "params": decay_params,
+                "weight_decay": weight_decay
+            },
+            {
+                "params": no_decay_params,
+                "weight_decay": 0.0
+            }
+        ]
+        optimizer = torch.optim.AdamW(optimizer_grouped_params, lr=lr, betas=(0.9, 0.95), eps=1e-8, fused=True)
+        return optimizer
 
     @torch.no_grad
     def generate(self, idx: torch.Tensor, max_new_tokens: int): 

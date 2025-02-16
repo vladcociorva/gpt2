@@ -47,13 +47,10 @@ data_loader = TokenShardDataloader(
 # - linear warm-up over 0.12% tokens (375m/300b)  
 # - cosine decay until 86% tokens (260b/300b) 
 # - train with min lr for the remaining 14% of tokens
-initial_lr = 6e-4
 steps_per_epoch = data_loader.total_tokens // global_batch_size
 print(f'steps/epoch: {steps_per_epoch}')
 warmup_steps = round(0.001 * steps_per_epoch)
-print(f'lr warmup steps: {warmup_steps}')
 decay_steps = round(0.866 * steps_per_epoch)
-print(f'lr decay steps: {decay_steps}')
 def cosine_decay_w_linear_warmup(step):
     # Should return a coefficient that the current lr will be multiplied with
     if step < warmup_steps:
@@ -66,7 +63,7 @@ def cosine_decay_w_linear_warmup(step):
 
 validation_cadence = 100
 
-optim = torch.optim.AdamW(model.parameters(), lr=initial_lr, betas=(0.9, 0.95), eps=1e-8, fused=True)
+optim = model.config_optimizer(weight_decay=0.1, lr=6e-4)  # matching gpt3-125M setup 
 scheduler = torch.optim.lr_scheduler.LambdaLR(optim, cosine_decay_w_linear_warmup)
 for step in range(steps_per_epoch):
     start = time.perf_counter()
