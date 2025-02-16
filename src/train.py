@@ -20,6 +20,8 @@ if torch.cuda.is_available():
     device = "cuda"
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 
 config = GPTConfig()
 model = GPT(config)
