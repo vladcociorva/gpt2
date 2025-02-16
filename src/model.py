@@ -16,13 +16,14 @@ class GPTConfig:
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, n_ctx: int):
+    def __init__(self, d_model: int, n_heads: int, n_ctx: int, use_flash_attn: bool = True):
         super().__init__()
 
         assert d_model % n_heads == 0
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
         self.d_model = d_model
+        self.use_flash_attn = use_flash_attn
 
         self.self_attention = nn.Linear(d_model, 3 * self.d_model, bias=False)
         self.proj = nn.Linear(d_model, d_model)  # projection back to the residual path
@@ -32,21 +33,24 @@ class MultiHeadAttention(nn.Module):
     def forward(self, x: torch.Tensor):
         B, T, C = x.shape
 
-        attn = self.self_attention(x) # (B, T, 3 * d_model)
-        q, k, v = attn.split(self.d_model, dim=-1) # each (B, T, d_model)
+        qkv = self.self_attention(x) # (B, T, 3 * d_model)
+        q, k, v = qkv.split(self.d_model, dim=-1) # each (B, T, d_model)
 
         q = q.view(B, T, self.n_heads, self.d_head).transpose(1, 2) # (B, n_heads, T, d_head)
         k = k.view(B, T, self.n_heads, self.d_head).transpose(1, 2) # (B, n_heads, T, d_head)
         v = v.view(B, T, self.n_heads, self.d_head).transpose(1, 2) # (B, n_heads, T, d_head)
 
-        affinities = q @ k.transpose(-2, -1) * k.shape[-1] ** -0.5 # (B, n_heads, T, d_head) @ (B, n_heads, d_head, T) -> (B, n_heads, T, T)
-        affinities = affinities.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))
-        affinities = F.softmax(affinities, dim=-1)
+        if self.use_flash_attn:
+            # will most likely use flash attention 2 on cuda, which should be much faster due to the fused operations 
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:
+            attn = q @ k.transpose(-2, -1) * k.shape[-1] ** -0.5 # (B, n_heads, T, d_head) @ (B, n_heads, d_head, T) -> (B, n_heads, T, T)
+            attn = attn.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))
+            attn = F.softmax(attn, dim=-1)
+            y = attn @ v # (B, n_heads, T, T) @ (B, n_heads, T, d_head) -> (B, n_heads, T, d_head)
 
-        y = affinities @ v # (B, n_heads, T, T) @ (B, n_heads, T, d_head) -> (B, n_heads, T, d_head)
         y = y.transpose(1, 2) # (B, T, n_heads, d_head) - for each token, the attn heads are grouped; n_heads * d_head == d_model == C
         y = y.contiguous().view(B, T, C) # contiguous to change the memory layout after transpose
-        
         y = self.proj(y)
         return y
 
