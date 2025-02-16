@@ -19,7 +19,6 @@ class TokenShardDataloader():
             self.total_tokens += os.path.getsize(shard_path) // token_size
         
         print(f"Total tokens: {self.total_tokens}")
-        print(f"Batches/epoch: {self.total_tokens // (self.B * self.T)}")
 
         self.current_shard = -1
         self._load_next_shard()

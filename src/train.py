@@ -28,10 +28,10 @@ model = GPT(config)
 model.to(device)
 model = torch.compile(model)
 
-B = 16   # micro-batch
+B = 16   # micro-batch size
 T = 1024 # sequence length
-batch_size = 524288 # 2**19 tokens; gpt3 paper mentions "0.5M" for the 125M params model
-grad_accum_steps = batch_size // (B * T) 
+global_batch_size = 524_288 # 2**19 tokens; gpt3 paper mentions "0.5M" for the 125M params model
+grad_accum_steps = global_batch_size // (B * T) 
 
 data_loader = TokenShardDataloader(
     B=B,
@@ -48,9 +48,12 @@ data_loader = TokenShardDataloader(
 # - cosine decay until 86% tokens (260b/300b) 
 # - train with min lr for the remaining 14% of tokens
 initial_lr = 6e-4
-steps_per_epoch = data_loader.total_tokens // (B * T)
+steps_per_epoch = data_loader.total_tokens // global_batch_size
+print(f'steps/epoch: {steps_per_epoch}')
 warmup_steps = round(0.001 * steps_per_epoch)
+print(f'lr warmup steps: {warmup_steps}')
 decay_steps = round(0.866 * steps_per_epoch)
+print(f'lr decay steps: {decay_steps}')
 def cosine_decay_w_linear_warmup(step):
     # Should return a coefficient that the current lr will be multiplied with
     if step < warmup_steps:
