@@ -16,9 +16,9 @@ GPT2_EOT = GPT2_TOKENIZER.eot_token
 
 device = "cpu"
 if torch.cuda.is_available():
+    device = "cuda"
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    device = "cuda"
 
 config = GPTConfig()
 model = GPT(config)
@@ -50,8 +50,13 @@ for step in range(steps):
     torch.cuda.synchronize()
     end = time.perf_counter()
 
-    print(f'step {step:<5} | loss {loss.item():.6f} | time {(end-start)*1e3:.2f}ms')
-    if step % gen_interval == 0: 
+    time_elapsed = end - start  # seconds
+    tokens_processed = data_loader.B * data_loader.T
+
+    print(
+        f"step {step:<5} | loss {loss.item():.6f} | time {time_elapsed*1e3:.2f}ms | tokens/s: {tokens_processed / time_elapsed:.2f}"
+    )
+    if step % gen_interval == 0:
         xg = torch.tensor([GPT2_EOT], dtype=torch.long, device=device).view(1, -1)
         yg = model.generate(xg, max_new_tokens=32)
         print(GPT2_TOKENIZER.decode(yg[0].tolist()))
