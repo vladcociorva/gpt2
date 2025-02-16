@@ -26,7 +26,6 @@ if torch.cuda.is_available():
 config = GPTConfig()
 model = GPT(config)
 model.to(device)
-
 model = torch.compile(model)
 
 data_loader = TokenShardDataloader(
@@ -69,8 +68,10 @@ for step in range(steps_per_epoch):
     x, y = data_loader.get_batch()
     x, y = x.to(device), y.to(device)
 
-    logits, loss = model(x, y)
-    loss.backward()
+    with torch.autocast(x.device.type, torch.bfloat16):
+        logits, loss = model(x, y)
+        loss.backward()
+
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) # this returns the initial norm (before clipping)
     optim.step()
     lr = scheduler.get_last_lr()[0]
