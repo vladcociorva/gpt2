@@ -27,6 +27,8 @@ config = GPTConfig()
 model = GPT(config)
 model.to(device)
 
+model = torch.compile(model)
+
 data_loader = TokenShardDataloader(
     B=8,  # max "nice" number that fits on a single 3090 (i.e. 24GB vram)
     T=1024,
