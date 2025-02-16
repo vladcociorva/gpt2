@@ -28,9 +28,14 @@ model = GPT(config)
 model.to(device)
 model = torch.compile(model)
 
+B = 16   # micro-batch
+T = 1024 # sequence length
+batch_size = 524288 # 2**19 tokens; gpt3 paper mentions "0.5M" for the 125M params model
+grad_accum_steps = batch_size // (B * T) 
+
 data_loader = TokenShardDataloader(
-    B=8,  # max "nice" number that fits on a single 3090 (i.e. 24GB vram)
-    T=1024,
+    B=B,
+    T=T,
     token_dtype=np.uint16,
     pad_value=GPT2_EOT,
     shards_dir="./fineweb_10b",
@@ -43,9 +48,9 @@ data_loader = TokenShardDataloader(
 # - cosine decay until 86% tokens (260b/300b) 
 # - train with min lr for the remaining 14% of tokens
 initial_lr = 6e-4
-steps_per_epoch = data_loader.total_tokens // (data_loader.B * data_loader.T)
-warmup_steps = round(0.0012 * steps_per_epoch)
-decay_steps = round(0.86 * steps_per_epoch)
+steps_per_epoch = data_loader.total_tokens // (B * T)
+warmup_steps = round(0.001 * steps_per_epoch)
+decay_steps = round(0.866 * steps_per_epoch)
 def cosine_decay_w_linear_warmup(step):
     # Should return a coefficient that the current lr will be multiplied with
     if step < warmup_steps:
@@ -65,12 +70,16 @@ for step in range(steps_per_epoch):
 
     optim.zero_grad()
 
-    x, y = data_loader.get_batch()
-    x, y = x.to(device), y.to(device)
+    batch_loss = 0.0
+    for micro_step in range(grad_accum_steps):
+        x, y = data_loader.get_batch()
+        x, y = x.to(device), y.to(device)
 
-    with torch.autocast(x.device.type, torch.bfloat16):
-        logits, loss = model(x, y)
-        loss.backward()
+        with torch.autocast(x.device.type, torch.bfloat16):
+            logits, loss = model(x, y)
+            loss /= grad_accum_steps
+            batch_loss += loss.detach()
+            loss.backward()
 
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) # this returns the initial norm (before clipping)
     optim.step()
@@ -81,10 +90,9 @@ for step in range(steps_per_epoch):
     end = time.perf_counter()
 
     time_elapsed = end - start  # seconds
-    tokens_processed = data_loader.B * data_loader.T
 
     print(
-        f"step {step:>5} | lr {lr:.6f} | loss {loss.item():.6f} | grad norm {norm:.3f} | time {time_elapsed*1e3:.2f}ms | tokens/s {tokens_processed / time_elapsed:.2f} "
+        f"step {step:>5} | lr {lr:.6f} | loss {batch_loss.item():.6f} | grad norm {norm:.3f} | time {time_elapsed*1e3:.2f}ms | tokens/s {B * T * grad_accum_steps / time_elapsed:.2f} "
     )
     if step % validation_cadence == 0:
         xg = torch.tensor([GPT2_EOT], dtype=torch.long, device=device).view(1, -1)
