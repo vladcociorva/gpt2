@@ -15,43 +15,40 @@ class GPTConfig:
     n_heads = 12  # number of attention heads
 
 
-class SelfAttentionHead(nn.Module):
-    def __init__(self, d_model: int, d_head: int, n_ctx: int):
-        super().__init__()
-
-        self.key = nn.Linear(d_model, d_head, bias=False)
-        self.query = nn.Linear(d_model, d_head, bias=False)
-        self.value = nn.Linear(d_model, d_head, bias=False)
-        self.register_buffer("mask", torch.tril(torch.ones(n_ctx, n_ctx)))
-
-    def forward(self, idx: torch.Tensor):
-        B, T, C = idx.shape
-
-        q = self.query(idx)  # (B, T, d_head)
-        k = self.key(idx)  # (B, T, d_head)
-        v = self.value(idx)  # (B, T, d_head)
-
-        affinities = q @ k.transpose(-2, -1) * k.shape[-1] ** -0.5  # (B, T, T)
-        affinities = affinities.masked_fill(self.mask[:T, :T] == 0, float("-inf"))
-        affinities = F.softmax(affinities, dim=-1)
-
-        out = affinities @ v  # (B, T, d_head)
-        return out
-
-
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_model: int, n_heads: int, n_ctx: int):
         super().__init__()
 
         assert d_model % n_heads == 0
-        d_head = d_model // n_heads
-        self.heads = nn.ModuleList([SelfAttentionHead(d_model, d_head, n_ctx) for _ in range(n_heads)])
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+        self.d_model = d_model
+
+        self.self_attention = nn.Linear(d_model, 3 * self.d_model, bias=False)
         self.proj = nn.Linear(d_model, d_model)  # projection back to the residual path
         self.proj.is_residual_projection = True 
+        self.register_buffer("mask", torch.tril(torch.ones(n_ctx, n_ctx)).view(1, 1, n_ctx, n_ctx))
 
     def forward(self, x: torch.Tensor):
-        x = torch.cat([head(x) for head in self.heads], dim=-1)
-        return self.proj(x)
+        B, T, C = x.shape
+
+        attn = self.self_attention(x) # (B, T, 3 * d_model)
+        q, k, v = attn.split(self.d_model, dim=-1) # each (B, T, d_model)
+
+        q = q.view(B, T, self.n_heads, self.d_head).transpose(1, 2) # (B, n_heads, T, d_head)
+        k = k.view(B, T, self.n_heads, self.d_head).transpose(1, 2) # (B, n_heads, T, d_head)
+        v = v.view(B, T, self.n_heads, self.d_head).transpose(1, 2) # (B, n_heads, T, d_head)
+
+        affinities = q @ k.transpose(-2, -1) * k.shape[-1] ** -0.5 # (B, n_heads, T, d_head) @ (B, n_heads, d_head, T) -> (B, n_heads, T, T)
+        affinities = affinities.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))
+        affinities = F.softmax(affinities, dim=-1)
+
+        y = affinities @ v # (B, n_heads, T, T) @ (B, n_heads, T, d_head) -> (B, n_heads, T, d_head)
+        y = y.transpose(1, 2) # (B, T, n_heads, d_head) - for each token, the attn heads are grouped; n_heads * d_head == d_model == C
+        y = y.contiguous().view(B, T, C) # contiguous to change the memory layout after transpose
+        
+        y = self.proj(y)
+        return y
 
 
 class MLP(nn.Module):
@@ -83,7 +80,6 @@ class DecoderLayer(nn.Module):
         x = x + self.multi_head_attn(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
         return x
-
 
 class GPT(nn.Module):
     def __init__(self, config: GPTConfig):
