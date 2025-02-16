@@ -137,3 +137,18 @@ class GPT(nn.Module):
             loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), targets.view(-1))
 
         return logits, loss
+
+    @torch.no_grad
+    def generate(self, idx: torch.Tensor, max_new_tokens: int): 
+        self.eval()
+        assert idx.dim() == 2
+
+        for _ in range(max_new_tokens):
+            idx_cond = idx if idx.shape[1] <= self.config.n_ctx else idx[:, -self.config.n_ctx:]
+            logits, _ = self(idx_cond)
+            logits = logits[:, -1, :]
+            probs = F.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat((idx, next_token), dim=-1)
+
+        return idx

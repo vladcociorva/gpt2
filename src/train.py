@@ -1,15 +1,17 @@
 import torch
+import tiktoken
 import numpy as np
 import random
 from model import GPT, GPTConfig
 from data import TokenShardDataloader
 
-GPT2_EOT = 50256
-
 seed = 42
 torch.manual_seed(seed)
 np.random.seed(seed)
 random.seed(seed)
+
+GPT2_TOKENIZER = tiktoken.get_encoding("gpt2")
+GPT2_EOT = GPT2_TOKENIZER.eot_token
 
 device = "cpu"
 if torch.cuda.is_available():
@@ -21,10 +23,11 @@ config = GPTConfig()
 model = GPT(config)
 model.to(device)
 
-steps = 5
+steps = 1000
+gen_interval = 10
 
 data_loader = TokenShardDataloader(
-    B=8,
+    B=8,  # max "nice" number that fits on a single 3090 (i.e. 24GB vram)
     T=1024,
     token_dtype=np.uint16,
     pad_value=GPT2_EOT,
@@ -40,4 +43,8 @@ for step in range(steps):
     logits, loss = model(x, y)
     loss.backward()
     optim.step()
-    print(f'{loss.item():.6f}')
+    print(f'step {step:<5} | loss {loss.item():.6f}')
+    if step % gen_interval == 0: 
+        xg = torch.tensor([GPT2_EOT], dtype=torch.long, device=device).view(1, -1)
+        yg = model.generate(xg, max_new_tokens=32)
+        print(GPT2_TOKENIZER.decode(yg[0].tolist()))
