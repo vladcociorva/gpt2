@@ -38,7 +38,7 @@ data_loader = TokenShardDataloader(
 x, y = data_loader.get_batch()
 x, y = x.to(device), y.to(device)
 
-optim = torch.optim.AdamW(model.parameters(), lr=3e-4)
+optim = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
 for step in range(steps):
     start = time.perf_counter()
 
