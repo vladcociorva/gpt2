@@ -45,6 +45,7 @@ for step in range(steps):
     optim.zero_grad()
     logits, loss = model(x, y)
     loss.backward()
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) # this returns the initial norm (before clipping)
     optim.step()
 
     torch.cuda.synchronize()
@@ -54,7 +55,7 @@ for step in range(steps):
     tokens_processed = data_loader.B * data_loader.T
 
     print(
-        f"step {step:<5} | loss {loss.item():.6f} | time {time_elapsed*1e3:.2f}ms | tokens/s: {tokens_processed / time_elapsed:.2f}"
+        f"step {step:<5} | loss {loss.item():.6f} | time {time_elapsed*1e3:.2f}ms | tokens/s {tokens_processed / time_elapsed:.2f} | grad norm {norm:.4f}"
     )
     if step % gen_interval == 0:
         xg = torch.tensor([GPT2_EOT], dtype=torch.long, device=device).view(1, -1)
