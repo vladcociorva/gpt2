@@ -14,11 +14,11 @@ class TokenShardDataloader():
 
         token_size = np.dtype(token_dtype).itemsize
 
-        total_tokens = 0
+        self.total_tokens = 0
         for shard_path in self.shard_paths:
-            total_tokens += os.path.getsize(shard_path) // token_size
+            self.total_tokens += os.path.getsize(shard_path) // token_size
         
-        print(f"Total tokens: {total_tokens}")
+        print(f"Total tokens: {self.total_tokens}")
 
         self.current_shard = -1
         self._load_next_shard()
@@ -30,6 +30,9 @@ class TokenShardDataloader():
         self.shard_mmap = np.memmap(self.shard_paths[self.current_shard], dtype=self.token_dtype, mode='r')
 
     def get_batch(self):
+        # Always return B sequences of T tokens, meaning that multiple distinct documents from the
+        # initial dataset might be packed in a single sequence (if they are shorter than T).
+        # This conforms with the GPT3 paper.
         B, T = self.B, self.T
 
         remaining_tokens = len(self.shard_mmap) - self.data_ptr
