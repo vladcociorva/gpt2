@@ -57,7 +57,7 @@ def cosine_decay_w_linear_warmup(step):
 
 validation_cadence = 100
 
-optim = torch.optim.AdamW(model.parameters(), lr=initial_lr, betas=(0.9, 0.95), eps=1e-8)
+optim = torch.optim.AdamW(model.parameters(), lr=initial_lr, betas=(0.9, 0.95), eps=1e-8, fused=True)
 scheduler = torch.optim.lr_scheduler.LambdaLR(optim, cosine_decay_w_linear_warmup)
 for step in range(steps_per_epoch):
     start = time.perf_counter()
