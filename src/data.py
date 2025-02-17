@@ -4,56 +4,68 @@ import torch
 import numpy as np
 
 
-class TokenShardDataloader():
-    def __init__(self, shards_dir, B, T, token_dtype, pad_value):
+class TokenShardDataloader:
+    def __init__(
+        self,
+        B: int,
+        T: int,
+        shards_dir: str,
+        token_dtype: np.dtype,
+        pad_value: int,
+        world_size: int,
+        local_rank: int
+    ):
         self.B, self.T = B, T
-
+        self.world_size = world_size
+        self.local_rank = local_rank
         self.pad_value = pad_value
         self.token_dtype = token_dtype
-        self.shard_paths = sorted(glob.glob(f'{shards_dir}/*.bin'))
 
-        token_size = np.dtype(token_dtype).itemsize
+        self._shard_paths = sorted(glob.glob(f"{shards_dir}/*.bin"))
 
         self.total_tokens = 0
-        for shard_path in self.shard_paths:
-            self.total_tokens += os.path.getsize(shard_path) // token_size
-        
-        print(f"Total tokens in {shards_dir}: {self.total_tokens}")
+        for shard_path in self._shard_paths:
+            self.total_tokens += os.path.getsize(shard_path) // token_dtype.itemsize
+        if local_rank == 0:
+            print(f"Total tokens in {shards_dir}: {self.total_tokens}")
+
+        self._token_slice_size = B * T + 1 # +1 for target of the last token in the batch
         self.reset()
 
     def reset(self):
-        self.current_shard = -1
+        self._current_shard = -1
         self._load_next_shard()
 
     def _load_next_shard(self):
         # TODO: Shuffling the samples around on an epoch end
-        self.current_shard = (self.current_shard + 1) % len(self.shard_paths)
-        self.data_ptr = 0
-        self.shard_mmap = np.memmap(self.shard_paths[self.current_shard], dtype=self.token_dtype, mode='r')
+        self._current_shard = (self._current_shard + 1) % len(self._shard_paths)
+        self._local_data_ptr = self.local_rank * self._token_slice_size
+        self._shard_mmap = np.memmap(
+            self._shard_paths[self._current_shard], dtype=self.token_dtype, mode="r"
+        )
 
+    # Always return B sequences of T tokens, meaning that multiple distinct documents from the
+    # initial dataset might be packed in a single sequence (if they are shorter than T).
+    # This conforms with the GPT3 paper.
     def get_batch(self):
-        # Always return B sequences of T tokens, meaning that multiple distinct documents from the
-        # initial dataset might be packed in a single sequence (if they are shorter than T).
-        # This conforms with the GPT3 paper.
-        B, T = self.B, self.T
-
-        remaining_tokens = len(self.shard_mmap) - self.data_ptr
-        required_tokens = B * T + 1
-
-        if remaining_tokens >= required_tokens:
-            tokens = self.shard_mmap[self.data_ptr : self.data_ptr + required_tokens]
-            self.data_ptr += required_tokens
+        if self._local_data_ptr + self._token_slice_size <= len(self._shard_mmap):
+            tokens = self._shard_mmap[self._local_data_ptr : self._local_data_ptr + self._token_slice_size]
+            self._local_data_ptr += self.world_size * self._token_slice_size
         else:
             # pad the rest of this last sample
-            tokens = self.shard_mmap[self.data_ptr:]
-            pad_tokens = np.full(required_tokens - remaining_tokens, self.pad_value, dtype=self.token_dtype)
+            tokens = self._shard_mmap[self._local_data_ptr:]
+            pad_tokens = np.full(
+                self._token_slice_size - len(tokens),
+                self.pad_value,
+                dtype=self.token_dtype,
+            )
             tokens = np.concatenate([tokens, pad_tokens])
-            self.data_ptr = len(self.shard_mmap)
-        
-        if self.data_ptr >= len(self.shard_mmap):
+            self._local_data_ptr = len(self._shard_mmap)
+
+        if self._local_data_ptr >= len(self._shard_mmap):
             self._load_next_shard()
 
         tokens = torch.tensor(tokens, dtype=torch.long)
-        x = tokens[:-1].view(B, T)
-        y = tokens[1:].view(B, T)
+        x = tokens[:-1].view(self.B, self.T)
+        y = tokens[1:].view(self.B, self.T)
         return x, y
