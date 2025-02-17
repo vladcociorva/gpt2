@@ -18,8 +18,10 @@ class TokenShardDataloader():
         for shard_path in self.shard_paths:
             self.total_tokens += os.path.getsize(shard_path) // token_size
         
-        print(f"Total tokens: {self.total_tokens}")
+        print(f"Total tokens in {shards_dir}: {self.total_tokens}")
+        self.reset()
 
+    def reset(self):
         self.current_shard = -1
         self._load_next_shard()
 
