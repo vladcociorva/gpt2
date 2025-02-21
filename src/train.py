@@ -11,6 +11,8 @@ import argparse
 from model import GPT, GPTConfig
 from data import TokenShardDataloader
 from utils import load_checkpoint_dir, save_checkpoint_dir
+from evals import HellaSwag
+
 
 # --------------------- Argument Parsing ---------------------
 parser = argparse.ArgumentParser(description="GPT training script with DDP")
@@ -66,7 +68,6 @@ if ddp:
     model = DDP(model, device_ids=[local_rank])
 raw_model = model.module if ddp else model
 
-
 # --------------------- Training setup ---------------------
 GLOBAL_BATCH_SIZE = 524_288 # 2**19 tokens; gpt3 paper mentions "0.5M" for the 125M params model
 SEQ_LENGTH = 1024 # GPT2 paper
@@ -98,6 +99,7 @@ val_data_loader = TokenShardDataloader(
     local_rank=local_rank,
     world_size=world_size
 )
+hellaswag_eval = HellaSwag()
 
 # GPT3 paper mentions warm up over the first 375m tokens. And doing decay over 260b tokens, then training with min lr (10% of initial).
 # All GPT3 variants were trained on 300b tokens, so:
@@ -121,7 +123,7 @@ optim = raw_model.config_optimizer(weight_decay=0.1, lr=6e-4)  # matching gpt3-1
 scheduler = torch.optim.lr_scheduler.LambdaLR(optim, cosine_decay_w_linear_warmup)
 
 start_step = 0
-val_cadence = 100
+val_cadence = 150
 val_loss_eval_steps = 20
 checkpoint_cadence = 300
 
@@ -133,7 +135,7 @@ if args.from_checkpoint:
 # --------------------- Training loop ---------------------
 for step in range(start_step, steps_per_epoch):
     if master_process and step % val_cadence == 0:
-        # calculate loss on the validation split
+        print('--------------------- Validation ---------------------')
         model.eval()
         val_data_loader.reset() # to evaluate the same tokens every time
         with torch.no_grad():
@@ -148,15 +150,21 @@ for step in range(start_step, steps_per_epoch):
             val_loss /= val_loss_eval_steps
             print_master(f'val loss {val_loss.item():.6f}')
 
+        # eval is under @torch.no_grad
+        accuracy = hellaswag_eval.eval(raw_model, GPT2_TOKENIZER, device)
+        print_master(f'hellaswag accuracy: {accuracy:.4f}')
+
         # sample some random tokens to see where the model's at
+        print_master('\nmodel sampling: ')
         xg = torch.tensor(EVAL_SAMPLE_PREFIX, dtype=torch.long, device=device).view(1, -1)
         yg = raw_model.generate(xg, max_new_tokens=256)
         print_master(GPT2_TOKENIZER.decode(yg[0].tolist()))
-
         model.train()
+        print('------------------------------------------------------')
 
     if master_process and step % checkpoint_cadence == 0:
         checkpoint_path = os.path.join(args.checkpoint_dir, f'checkpoint_{step}/')
+        print_master(f'saving training checkpoint at {checkpoint_path}')
         save_checkpoint_dir(checkpoint_path, step, raw_model, optim, scheduler, train_data_loader)
 
     start = time.perf_counter()
