@@ -2,6 +2,7 @@ import os
 import glob
 import torch
 import numpy as np
+from typing import Any
 
 
 class TokenShardDataloader:
@@ -27,7 +28,7 @@ class TokenShardDataloader:
         for shard_path in self._shard_paths:
             self.total_tokens += os.path.getsize(shard_path) // token_dtype.itemsize
         if local_rank == 0:
-            print(f"Total tokens in {shards_dir}: {self.total_tokens}")
+            print(f"total tokens in {shards_dir}: {self.total_tokens}")
 
         self._token_slice_size = B * T + 1 # +1 for target of the last token in the batch
         self.reset()
@@ -40,6 +41,23 @@ class TokenShardDataloader:
         # TODO: Shuffling the samples around on an epoch end
         self._current_shard = (self._current_shard + 1) % len(self._shard_paths)
         self._local_data_ptr = self.local_rank * self._token_slice_size
+        self._shard_mmap = np.memmap(
+            self._shard_paths[self._current_shard], dtype=self.token_dtype, mode="r"
+        )
+
+    # for checkpoiting
+    def state_dict(self):
+        return {
+            "current_shard": self._current_shard,
+            "local_data_ptr": self._local_data_ptr
+        }
+
+    def load_state_dict(self, state: dict[str, Any]):
+        print(state)
+        self._current_shard = state["current_shard"]
+
+        # local_data_ptr is the ptr of the master process (rank 0); need to offset for the other processes
+        self._local_data_ptr = state["local_data_ptr"] * (self.local_rank * self._token_slice_size)
         self._shard_mmap = np.memmap(
             self._shard_paths[self._current_shard], dtype=self.token_dtype, mode="r"
         )

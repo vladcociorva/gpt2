@@ -3,3 +3,4 @@ __pycache__/
 data/**/
 tiny_shakespeare/
 fineweb_10b/
+checkpoints/

@@ -10,6 +10,7 @@ import random
 import argparse
 from model import GPT, GPTConfig
 from data import TokenShardDataloader
+from utils import load_checkpoint_dir, save_checkpoint_dir
 
 # --------------------- Argument Parsing ---------------------
 parser = argparse.ArgumentParser(description="GPT training script with DDP")
@@ -17,6 +18,10 @@ parser.add_argument("--micro_batch_size", type=int, default=16,
                     help="Micro batch size (default: 16)")
 parser.add_argument("--dataset_dir", type=str, default="./fineweb_10b",
                     help="Dataset directory (default: ./fineweb_10b)")
+parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints",
+                    help="Directory for saving checkpoints (default: ./checkpoints)")
+parser.add_argument("--from_checkpoint", type=str, default=None,
+                    help="Path of a checkpoint directory to resume training from (default: None)")
 args = parser.parse_args()
 
 
@@ -40,7 +45,6 @@ print_master = lambda s: print(s) if master_process else ...
 # --------------------- Torch config ---------------------
 device = f'cuda:{local_rank}'
 torch.cuda.set_device(device)
-
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
@@ -113,17 +117,49 @@ def cosine_decay_w_linear_warmup(step):
         return cosine_decay * 0.9 + 0.1
     return 0.1
 
-val_cadence = 100
-val_loss_eval_steps = 20
-
 optim = raw_model.config_optimizer(weight_decay=0.1, lr=6e-4)  # matching gpt3-125M setup 
 scheduler = torch.optim.lr_scheduler.LambdaLR(optim, cosine_decay_w_linear_warmup)
 
+start_step = 0
+val_cadence = 100
+val_loss_eval_steps = 20
+checkpoint_cadence = 300
+
+if args.from_checkpoint:
+    print_master(f'resuming training from checkpoint: {args.from_checkpoint}')
+    start_step = load_checkpoint_dir(args.from_checkpoint, raw_model, optim, scheduler, train_data_loader)
+
 
 # --------------------- Training loop ---------------------
-for step in range(steps_per_epoch):
-    start = time.perf_counter()
+for step in range(start_step, steps_per_epoch):
+    if master_process and step % val_cadence == 0:
+        # calculate loss on the validation split
+        model.eval()
+        val_data_loader.reset() # to evaluate the same tokens every time
+        with torch.no_grad():
+            val_loss = 0.0
+            for val_step in range(val_loss_eval_steps):
+                x, y = val_data_loader.get_batch()
+                x, y = x.to(device), y.to(device)
+                with torch.autocast(x.device.type, torch.bfloat16):
+                    logits, loss = model(x, y)
+                    val_loss += loss.detach()
 
+            val_loss /= val_loss_eval_steps
+            print_master(f'val loss {val_loss.item():.6f}')
+
+        # sample some random tokens to see where the model's at
+        xg = torch.tensor(EVAL_SAMPLE_PREFIX, dtype=torch.long, device=device).view(1, -1)
+        yg = raw_model.generate(xg, max_new_tokens=256)
+        print_master(GPT2_TOKENIZER.decode(yg[0].tolist()))
+
+        model.train()
+
+    if master_process and step % checkpoint_cadence == 0:
+        checkpoint_path = os.path.join(args.checkpoint_dir, f'checkpoint_{step}/')
+        save_checkpoint_dir(checkpoint_path, step, raw_model, optim, scheduler, train_data_loader)
+
+    start = time.perf_counter()
     optim.zero_grad()
 
     batch_loss = 0.0
@@ -164,28 +200,6 @@ for step in range(steps_per_epoch):
     print_master(
         f"step {step:>5} | lr {lr:.6f} | loss {batch_loss.item():.6f} | grad norm {norm:.3f} | time {time_elapsed*1e3:.2f}ms | tokens/s {B * T * grad_accum_steps * world_size / time_elapsed:.2f}"
     )
-    if step % val_cadence == 0:
-        # calculate loss on the validation split
-        model.eval()
-        val_data_loader.reset() # to evaluate the same tokens every time
-        with torch.no_grad():
-            val_loss = 0.0
-            for val_step in range(val_loss_eval_steps):
-                x, y = val_data_loader.get_batch()
-                x, y = x.to(device), y.to(device)
-                with torch.autocast(x.device.type, torch.bfloat16):
-                    logits, loss = model(x, y)
-                    val_loss += loss.detach()
-
-            val_loss /= val_loss_eval_steps
-            print_master(f'val loss {val_loss.item():.6f}')
-
-        # sample some random tokens to see where the model's at
-        xg = torch.tensor(EVAL_SAMPLE_PREFIX, dtype=torch.long, device=device).view(1, -1)
-        yg = raw_model.generate(xg, max_new_tokens=256)
-        print_master(GPT2_TOKENIZER.decode(yg[0].tolist()))
-
-        model.train()
 
 if ddp:
     dist.destroy_process_group()
