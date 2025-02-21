@@ -201,5 +201,9 @@ for step in range(start_step, steps_per_epoch):
         f"step {step:>5} | lr {lr:.6f} | loss {batch_loss.item():.6f} | grad norm {norm:.3f} | time {time_elapsed*1e3:.2f}ms | tokens/s {B * T * grad_accum_steps * world_size / time_elapsed:.2f}"
     )
 
+if master_process: 
+    checkpoint_path = os.path.join(args.checkpoint_dir, f'checkpoint_{step}/')
+    save_checkpoint_dir(checkpoint_path, step, raw_model, optim, scheduler, train_data_loader)
+
 if ddp:
     dist.destroy_process_group()
