@@ -7,14 +7,26 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import tiktoken
 import numpy as np
 import random
+import argparse
 from model import GPT, GPTConfig
 from data import TokenShardDataloader
 
-DATASET_DIR = "./fineweb_10b"
+# --------------------- Argument Parsing ---------------------
+parser = argparse.ArgumentParser(description="GPT training script with DDP")
+parser.add_argument("--micro_batch_size", type=int, default=16,
+                    help="Micro batch size (default: 16)")
+parser.add_argument("--dataset_dir", type=str, default="./fineweb_10b",
+                    help="Dataset directory (default: ./fineweb_10b)")
+args = parser.parse_args()
+
+
+# --------------------- Global Configurations ---------------------
 GPT2_TOKENIZER = tiktoken.get_encoding("gpt2")
 GPT2_EOT = GPT2_TOKENIZER.eot_token
 EVAL_SAMPLE_PREFIX = [GPT2_EOT] + GPT2_TOKENIZER.encode_ordinary("The meaning of life is")
 
+
+# --------------------- Distributed Setup ---------------------
 ddp = "WORLD_SIZE" in os.environ
 if ddp: 
     dist.init_process_group(backend='nccl')
@@ -24,17 +36,24 @@ local_rank = int(os.getenv('LOCAL_RANK', 0))
 master_process = (local_rank == 0) # only one process should do logging, checkpointing, etc.
 print_master = lambda s: print(s) if master_process else ...
 
+
+# --------------------- Torch config ---------------------
+device = f'cuda:{local_rank}'
+torch.cuda.set_device(device)
+
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
+
+# --------------------- Reproducibility ---------------------
 seed = 42
 torch.manual_seed(seed)
 np.random.seed(seed)
 random.seed(seed)
-
-device = f'cuda:{local_rank}'
-torch.cuda.set_device(device)
 torch.cuda.manual_seed_all(seed)
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
 
+
+# --------------------- Model init ---------------------
 config = GPTConfig()
 model = GPT(config)
 model.to(device)
@@ -43,22 +62,27 @@ if ddp:
     model = DDP(model, device_ids=[local_rank])
 raw_model = model.module if ddp else model
 
-B = 16   # micro-batch size
-T = 1024 # sequence length
-global_batch_size = 524_288 # 2**19 tokens; gpt3 paper mentions "0.5M" for the 125M params model
-assert global_batch_size % (B * T * world_size) == 0
-grad_accum_steps = global_batch_size // (B * T * world_size)
+
+# --------------------- Training setup ---------------------
+GLOBAL_BATCH_SIZE = 524_288 # 2**19 tokens; gpt3 paper mentions "0.5M" for the 125M params model
+SEQ_LENGTH = 1024 # GPT2 paper
+
+B = args.micro_batch_size
+T = SEQ_LENGTH
+assert GLOBAL_BATCH_SIZE % (B * T * world_size) == 0
+grad_accum_steps = GLOBAL_BATCH_SIZE // (B * T * world_size)
 print_master(f"global grad accumulation steps: {grad_accum_steps}")
+
 train_data_loader = TokenShardDataloader(
     B=B,
     T=T,
     token_dtype=np.dtype(np.uint16),
     pad_value=GPT2_EOT,
-    shards_dir=f"{DATASET_DIR}/train",
+    shards_dir=f"{args.dataset_dir}/train",
     local_rank=local_rank,
     world_size=world_size
 )
-steps_per_epoch = train_data_loader.total_tokens // global_batch_size
+steps_per_epoch = train_data_loader.total_tokens // GLOBAL_BATCH_SIZE
 print_master(f'steps/epoch: {steps_per_epoch}')
 
 val_data_loader = TokenShardDataloader(
@@ -66,7 +90,7 @@ val_data_loader = TokenShardDataloader(
     T=T,
     token_dtype=np.dtype(np.uint16),
     pad_value=GPT2_EOT,
-    shards_dir=f"{DATASET_DIR}/val",
+    shards_dir=f"{args.dataset_dir}/val",
     local_rank=local_rank,
     world_size=world_size
 )
@@ -94,6 +118,9 @@ val_loss_eval_steps = 20
 
 optim = raw_model.config_optimizer(weight_decay=0.1, lr=6e-4)  # matching gpt3-125M setup 
 scheduler = torch.optim.lr_scheduler.LambdaLR(optim, cosine_decay_w_linear_warmup)
+
+
+# --------------------- Training loop ---------------------
 for step in range(steps_per_epoch):
     start = time.perf_counter()
 
