@@ -131,9 +131,9 @@ optim = raw_model.config_optimizer(weight_decay=0.1, lr=6e-4)  # matching gpt3-1
 scheduler = torch.optim.lr_scheduler.LambdaLR(optim, cosine_decay_w_linear_warmup)
 
 start_step = 0
-val_cadence = 100
-val_loss_eval_steps = 20
-checkpoint_cadence = 300
+val_cadence = 500
+val_loss_eval_steps = 50
+checkpoint_cadence = 1000
 
 if args.from_checkpoint:
     print_master(f'resuming training from checkpoint: {args.from_checkpoint}')
@@ -250,7 +250,7 @@ for step in range(start_step, args.epochs * steps_per_epoch):
         })
 
     print_master(
-        f"step {step:>5} | lr {lr:.6f} | loss {loss:.6f} | grad norm {norm:.3f} | time {time_elapsed*1e3:.2f}ms | tokens/s {tokens_procesed}"
+        f"step {step:>5} | lr {lr:.6f} | loss {loss:.6f} | grad norm {norm:.3f} | time {time_elapsed*1e3:.2f}ms | tokens/s {tokens_procesed:.2f}"
     )
 
 if master_process: 

@@ -27,20 +27,22 @@ def save_checkpoint_dir(dir, step, raw_model, optimizer, scheduler, dataloader):
     }
     torch.save(rng_dict, rng_path)
 
-def load_checkpoint_dir(dir, raw_model, optimizer, scheduler, dataloader):
+def load_checkpoint_dir(dir, raw_model, optimizer, scheduler, dataloader, weights_only=False):
     weights_path = os.path.join(dir, "weights.pt")
-    optim_path = os.path.join(dir, "optim.pt")
-    rng_path = os.path.join(dir, "rng.pt")
-
     weights = torch.load(weights_path, map_location='cpu')
     raw_model.load_state_dict(weights)
 
+    if weights_only:
+        return
+
+    optim_path = os.path.join(dir, "optim.pt")
     optim_dict = torch.load(optim_path, map_location='cpu')
     step = optim_dict["step"]
     optimizer.load_state_dict(optim_dict["optimizer_state"])
     scheduler.load_state_dict(optim_dict["scheduler_state"])
     dataloader.load_state_dict(optim_dict["dataloader_state"])
 
+    rng_path = os.path.join(dir, "rng.pt")
     rng_dict = torch.load(rng_path, map_location='cpu', weights_only=False)
     torch.set_rng_state(rng_dict["torch_rng_state"])
     torch.cuda.set_rng_state_all(rng_dict["cuda_rng_state"])

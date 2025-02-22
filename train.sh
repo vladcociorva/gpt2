@@ -13,8 +13,8 @@ else
 fi
 
 torchrun --standalone --nproc_per_node $NPROC src/train.py \
-    --micro_batch_size $MICRO_BATCH_SIZE \
-    --dataset_dir $DATASET_DIR \
-    --checkpoint_dir $CHECKPOINT_DIR \
-    --epochs $EPOCHS \
-    --wandb_project $WANDB_PROJECT
+    ${MICRO_BATCH_SIZE:+--micro_batch_size $MICRO_BATCH_SIZE} \
+    ${DATASET_DIR:+--dataset_dir $DATASET_DIR} \
+    ${CHECKPOINT_DIR:+--checkpoint_dir $CHECKPOINT_DIR} \
+    ${EPOCHS:+--epochs $EPOCHS} \
+    ${WANDB_PROJECT:+--wandb_project $WANDB_PROJECT}

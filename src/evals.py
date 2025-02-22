@@ -40,9 +40,13 @@ class HellaSwag():
             mask = torch.tensor(candidate_masks, device=device) # (4, max_len)
 
             logits, _ = model(x) # (4, max_len, vocab_size)
-            log_probs = F.log_softmax(logits, dim=-1) # (4, max_len, vocab_size)
-            token_log_probs = torch.gather(log_probs, dim=-1, index=x.unsqueeze(-1)).squeeze(-1) # (4, max_len)
-            candidate_scores = (token_log_probs * mask).sum(dim=1) # (4, )
+            shifted_logits = logits[:, :-1, :]  # (batch, max_len-1, vocab_size)
+            shifted_targets = x[:, 1:]          # (batch, max_len-1)
+            shifted_mask = mask[:, 1:]          # (batch, max_len-1)
+
+            log_probs = F.log_softmax(shifted_logits, dim=-1) # (4, max_len-1, vocab_size)
+            token_log_probs = torch.gather(log_probs, dim=-1, index=shifted_targets.unsqueeze(-1)).squeeze(-1) # (4, max_len-1)
+            candidate_scores = (token_log_probs * shifted_mask).sum(dim=1) # (4, )
             
             most_likely = torch.argmax(candidate_scores).item()
             return most_likely == label
