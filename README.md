@@ -178,8 +178,6 @@ Each training step took **~150ms** on average. In other words, we processed **3.
 The validation runs took considerably longer.
 
 ## Results
-> TODO: compare with actual gpt2-124m on these metrics 
-
 
 ### Loss / val loss
 Both the training loss and the validation loss are pretty consistent throughout the run (probably because it's impossbile for a model of this size to actually overfit the training data in one epoch). 
@@ -188,7 +186,7 @@ After one epoch, they eventually reached about `~3.31`.
 ![](assets/losses.svg)
 
 ### Hellswag
-The `HellaSwag` accuracy consistenly increased across the training from random (1/4 = **0.25**) to about **0.285**.
+The `HellaSwag` accuracy consistenly increased across the training from random (1/4 = **0.25**) to about **0.285**. The final accuracy is above the actual gpt2 124M.
 ![](assets/hellaswag.svg)
 
 ### Sampling: Meaning of life
